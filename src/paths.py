@@ -1,9 +1,10 @@
+import os
 from pathlib import Path
 
 
 RAW_DIR = Path("data/raw")
 PROCESSED_DIR = Path("data/processed")
-OUTPUTS_DIR = Path("outputs")
+OUTPUTS_DIR = Path(os.environ.get("KSE_AGENTIC_OUTPUTS_DIR", "outputs"))
 KYIV_TZ = "Europe/Kyiv"
 
 DATASETS = {

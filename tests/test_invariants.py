@@ -1,5 +1,6 @@
 import contextlib
 import io
+import os
 import subprocess
 import sys
 import tempfile
@@ -8,13 +9,14 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.backtest_model import build_purged_fold, run_backtest
+from src.backtest_model import build_purged_fold, load_feature_panel, run_backtest
 from src.evaluate_baselines import (
     FEATURE_COLUMNS,
     NUMERIC_FEATURES,
     add_leakage_safe_features,
     assert_no_split_target_overlap,
     chronological_split,
+    filter_v1_modeling_scope,
     make_logistic_regression,
 )
 from src.paths import KYIV_TZ
@@ -101,8 +103,72 @@ class PanelPreparationTests(unittest.TestCase):
         expected_last_forecast_date = (today - pd.Timedelta(days=2)).date().isoformat()
         self.assertEqual(panel["date"].max(), expected_last_forecast_date)
 
+    def test_kyiv_local_midnight_assigns_utc_events_to_correct_local_day(self) -> None:
+        raw = pd.DataFrame(
+            [
+                {"region": "A", "started_at": "2025-01-01 21:59:00+00:00", "finished_at": "2025-01-01 22:29:00+00:00", "naive": False},
+                {"region": "A", "started_at": "2025-01-01 22:01:00+00:00", "finished_at": "2025-01-01 22:31:00+00:00", "naive": False},
+                {"region": "A", "started_at": "2025-01-03 12:00:00+00:00", "finished_at": "2025-01-03 12:30:00+00:00", "naive": False},
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_path = Path(tmpdir) / "volunteer.csv"
+            output_path = Path(tmpdir) / "panel.csv"
+            raw.to_csv(raw_path, index=False)
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                panel = build_volunteer_daily_panel(raw_path, output_path)
+
+        keyed = panel.set_index(["region", "date"])
+        self.assertEqual(keyed.loc[("A", "2025-01-01"), "alert_starts"], 1)
+        self.assertEqual(keyed.loc[("A", "2025-01-02"), "alert_starts"], 1)
+
+    def test_kyiv_dst_transition_keeps_local_calendar_day_semantics(self) -> None:
+        raw = pd.DataFrame(
+            [
+                {"region": "A", "started_at": "2025-03-29 21:30:00+00:00", "finished_at": "2025-03-29 22:00:00+00:00", "naive": False},
+                {"region": "A", "started_at": "2025-03-29 22:30:00+00:00", "finished_at": "2025-03-29 23:00:00+00:00", "naive": False},
+                {"region": "A", "started_at": "2025-10-25 20:30:00+00:00", "finished_at": "2025-10-25 21:00:00+00:00", "naive": False},
+                {"region": "A", "started_at": "2025-10-25 21:30:00+00:00", "finished_at": "2025-10-25 22:00:00+00:00", "naive": False},
+                {"region": "A", "started_at": "2025-10-27 12:00:00+00:00", "finished_at": "2025-10-27 12:30:00+00:00", "naive": False},
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_path = Path(tmpdir) / "volunteer.csv"
+            output_path = Path(tmpdir) / "panel.csv"
+            raw.to_csv(raw_path, index=False)
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                panel = build_volunteer_daily_panel(raw_path, output_path)
+
+        keyed = panel.set_index(["region", "date"])
+        self.assertEqual(keyed.loc[("A", "2025-03-29"), "alert_starts"], 1)
+        self.assertEqual(keyed.loc[("A", "2025-03-30"), "alert_starts"], 1)
+        self.assertEqual(keyed.loc[("A", "2025-10-25"), "alert_starts"], 1)
+        self.assertEqual(keyed.loc[("A", "2025-10-26"), "alert_starts"], 1)
+
 
 class FeatureEngineeringTests(unittest.TestCase):
+    def test_v1_modeling_scope_excludes_luhanska_oblast_only(self) -> None:
+        panel = pd.DataFrame(
+            [
+                {"region": "A", "date": pd.Timestamp("2026-01-01"), "alert_starts": 1, "has_alert_next_day": 0},
+                {"region": "Luhanska oblast", "date": pd.Timestamp("2026-01-01"), "alert_starts": 0, "has_alert_next_day": 0},
+            ]
+        )
+
+        scoped = filter_v1_modeling_scope(panel)
+
+        self.assertEqual(scoped["region"].tolist(), ["A"])
+
+    def test_loaded_feature_panel_uses_v1_modeling_scope(self) -> None:
+        panel = load_feature_panel()
+
+        self.assertEqual(panel["region"].nunique(), 24)
+        self.assertNotIn("Luhanska oblast", set(panel["region"]))
+
     def test_rolling_features_use_same_region_and_dates_up_to_d_only(self) -> None:
         dates = pd.date_range("2026-01-01", periods=4, freq="D")
         panel = pd.DataFrame(
@@ -219,23 +285,27 @@ class PreprocessingTests(unittest.TestCase):
 
 class CliSmokeTests(unittest.TestCase):
     def test_cli_latest_mode_smoke(self) -> None:
-        result = subprocess.run(
-            [
-                sys.executable,
-                "start.py",
-                "--mode",
-                "latest",
-                "--validation-days",
-                "5",
-                "--evaluation-days",
-                "5",
-            ],
-            cwd=Path(__file__).resolve().parents[1],
-            text=True,
-            capture_output=True,
-            timeout=45,
-            check=False,
-        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env = os.environ.copy()
+            env["KSE_AGENTIC_OUTPUTS_DIR"] = str(Path(tmpdir) / "outputs")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "start.py",
+                    "--mode",
+                    "latest",
+                    "--validation-days",
+                    "5",
+                    "--evaluation-days",
+                    "5",
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                env=env,
+                text=True,
+                capture_output=True,
+                timeout=45,
+                check=False,
+            )
 
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         self.assertIn("LATEST-PERIOD EVALUATION", result.stdout)

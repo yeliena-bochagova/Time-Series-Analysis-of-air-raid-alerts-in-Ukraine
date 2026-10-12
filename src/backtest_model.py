@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 from src.evaluate_baselines import (
     FEATURE_COLUMNS,
     add_leakage_safe_features,
+    filter_v1_modeling_scope,
     confusion_counts,
     load_panel,
     make_logistic_regression,
@@ -360,7 +361,8 @@ def save_backtest_outputs(results: pd.DataFrame, prefix: str, title: str) -> Non
 
 
 def load_feature_panel() -> pd.DataFrame:
-    return add_leakage_safe_features(load_panel(VOLUNTEER_PANEL_PATH))
+    panel = filter_v1_modeling_scope(load_panel(VOLUNTEER_PANEL_PATH))
+    return add_leakage_safe_features(panel)
 
 
 def run_latest_period_evaluation(

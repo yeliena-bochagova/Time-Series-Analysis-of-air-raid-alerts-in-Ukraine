@@ -19,6 +19,7 @@ from src.paths import VOLUNTEER_PANEL_PATH
 VALIDATION_DAYS = 30
 TEST_DAYS = 30
 VALIDATION_SUPPORTED_LOGISTIC_THRESHOLD = 0.50
+EXCLUDED_V1_REGIONS = ["Luhanska oblast"]
 
 NUMERIC_FEATURES = [
     "alert_starts_today",
@@ -38,6 +39,10 @@ NUMERIC_FEATURES = [
 ]
 CATEGORICAL_FEATURES = ["region"]
 FEATURE_COLUMNS = NUMERIC_FEATURES + CATEGORICAL_FEATURES
+
+
+def filter_v1_modeling_scope(panel: pd.DataFrame) -> pd.DataFrame:
+    return panel[~panel["region"].isin(EXCLUDED_V1_REGIONS)].copy()
 
 
 def load_panel(path) -> pd.DataFrame:
@@ -412,7 +417,7 @@ def print_validation_final_model_experiment(splits: dict[str, pd.DataFrame], log
 
 
 def run_baseline_evaluation() -> dict[str, pd.DataFrame]:
-    panel = add_leakage_safe_features(load_panel(VOLUNTEER_PANEL_PATH))
+    panel = add_leakage_safe_features(filter_v1_modeling_scope(load_panel(VOLUNTEER_PANEL_PATH)))
     splits = chronological_split(panel)
 
     print_split_ranges(splits)

@@ -18,7 +18,7 @@ from src.paths import VOLUNTEER_PANEL_PATH
 
 VALIDATION_DAYS = 30
 TEST_DAYS = 30
-VALIDATION_SUPPORTED_LOGISTIC_THRESHOLD = 0.40
+VALIDATION_SUPPORTED_LOGISTIC_THRESHOLD = 0.50
 
 NUMERIC_FEATURES = [
     "alert_starts_today",
@@ -52,24 +52,48 @@ def load_panel(path) -> pd.DataFrame:
     if missing_columns:
         raise ValueError(f"Panel is missing required columns: {sorted(missing_columns)}")
 
+    panel["target_date"] = panel["date"] + pd.Timedelta(days=1)
     return panel
 
 
 def chronological_split(panel: pd.DataFrame) -> dict[str, pd.DataFrame]:
     dates = pd.Index(sorted(panel["date"].unique()))
-    needed_days = VALIDATION_DAYS + TEST_DAYS
+    needed_days = VALIDATION_DAYS + TEST_DAYS + 2
     if len(dates) < needed_days:
         raise ValueError(f"Need at least {needed_days} forecast days, found {len(dates)}.")
 
     test_dates = dates[-TEST_DAYS:]
-    validation_dates = dates[-(VALIDATION_DAYS + TEST_DAYS) : -TEST_DAYS]
-    train_dates = dates[: -(VALIDATION_DAYS + TEST_DAYS)]
+    test_start = test_dates[0]
 
-    return {
+    validation_candidates = dates[dates < test_start - pd.Timedelta(days=1)]
+    if len(validation_candidates) < VALIDATION_DAYS:
+        raise ValueError("Not enough forecast days before the test purge gap for validation.")
+    validation_dates = validation_candidates[-VALIDATION_DAYS:]
+    validation_start = validation_dates[0]
+
+    train_dates = dates[dates < validation_start - pd.Timedelta(days=1)]
+    if train_dates.empty:
+        raise ValueError("Not enough forecast days before the validation purge gap for training.")
+
+    splits = {
         "train": panel[panel["date"].isin(train_dates)].copy(),
         "validation": panel[panel["date"].isin(validation_dates)].copy(),
         "test": panel[panel["date"].isin(test_dates)].copy(),
     }
+    assert_no_split_target_overlap(splits)
+    return splits
+
+
+def assert_no_split_target_overlap(splits: dict[str, pd.DataFrame]) -> None:
+    train_target_end = splits["train"]["target_date"].max()
+    validation_start = splits["validation"]["date"].min()
+    validation_target_end = splits["validation"]["target_date"].max()
+    test_start = splits["test"]["date"].min()
+
+    if train_target_end >= validation_start:
+        raise ValueError("Training labels overlap the validation forecast period.")
+    if validation_target_end >= test_start:
+        raise ValueError("Validation labels overlap the test forecast period.")
 
 
 def add_leakage_safe_features(panel: pd.DataFrame) -> pd.DataFrame:
@@ -114,7 +138,12 @@ def print_split_ranges(splits: dict[str, pd.DataFrame]) -> None:
         unique_days = split["date"].nunique()
         start = split["date"].min().date() if not split.empty else "none"
         end = split["date"].max().date() if not split.empty else "none"
-        print(f"{name}: {start} to {end} ({unique_days:,} forecast days, {len(split):,} rows)")
+        target_start = split["target_date"].min().date() if not split.empty else "none"
+        target_end = split["target_date"].max().date() if not split.empty else "none"
+        print(
+            f"{name}: forecast {start} to {end}; target {target_start} to {target_end} "
+            f"({unique_days:,} forecast days, {len(split):,} rows)"
+        )
 
 
 def baseline_predictions(split: pd.DataFrame) -> dict[str, pd.Series]:

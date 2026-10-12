@@ -30,13 +30,17 @@
 - `finished_at` can leak future information if an alert has not ended by the forecast cutoff.
 - The volunteer `naive` column indicates inferred end times, so duration-based analysis should treat those rows carefully.
 - The latest incomplete local day should be handled carefully before evaluation.
+- Because the label for forecast day `D` comes from `D+1`, chronological evaluation must avoid split-boundary target leakage.
+- The evaluation now uses purge gaps before validation and test so that training labels do not overlap validation forecast dates, and validation labels do not overlap test forecast dates.
 
 ## Current Implementation State
 
 - Raw download/audit is implemented in `src/raw_data_audit.py`.
 - Daily volunteer region-date panel preparation is implemented in `src/prepare_daily_panel.py`.
 - Baseline and logistic-regression evaluation is implemented in `src/evaluate_baselines.py`.
-- `start.py` currently runs the evaluation stage.
+- Historical backtesting and CLI-facing evaluation helpers are implemented in `src/backtest_model.py`.
+- `start.py` is the user-facing CLI entry point for latest-period evaluation and historical backtests.
+- Detailed fold results and plots are saved under `outputs/`.
 - Processed volunteer panel path: `data/processed/volunteer_daily_region_panel.csv`.
 - The processed panel has one row per region per complete `Europe/Kyiv` forecast day, with `alert_starts` and `has_alert_next_day`.
 - Current processed panel summary: `2022-02-25` to `2026-10-10`, 25 regions, 42,225 rows, positive target rate 70.46%.
@@ -47,13 +51,21 @@
 C:\ProgramData\anaconda3\envs\kse_agentic\python.exe
 ```
 
+Example CLI runs:
+
+```text
+C:\ProgramData\anaconda3\envs\kse_agentic\python.exe start.py --mode latest
+C:\ProgramData\anaconda3\envs\kse_agentic\python.exe start.py --mode backtest --folds 6 --step-days 90
+C:\ProgramData\anaconda3\envs\kse_agentic\python.exe start.py --mode all --validation-days 30 --evaluation-days 30
+```
+
 ## Evaluation Setup
 
-- Chronological split uses the latest 30 complete forecast days as test, the preceding 30 days as validation, and everything earlier as training/history.
+- Chronological split uses the latest 30 complete forecast days as test, 30 validation forecast days before a one-day purge gap, and training/history before another one-day purge gap.
 - Current split:
-  - Train: `2022-02-25` to `2026-08-11`.
-  - Validation: `2026-08-12` to `2026-09-10`.
-  - Test: `2026-09-11` to `2026-10-10`.
+  - Train forecast dates: `2022-02-25` to `2026-08-09`; target dates: `2022-02-26` to `2026-08-10`.
+  - Validation forecast dates: `2026-08-11` to `2026-09-09`; target dates: `2026-08-12` to `2026-09-10`.
+  - Test forecast dates: `2026-09-11` to `2026-10-10`; target dates: `2026-09-12` to `2026-10-11`.
 - Baselines implemented:
   - Always predict alert tomorrow.
   - Persistence: predict alert tomorrow if the current day has at least one alert.
@@ -73,8 +85,11 @@ C:\ProgramData\anaconda3\envs\kse_agentic\python.exe
 - With national context: balanced accuracy 0.896, false positives 16, false negatives 70.
 - The simple shared-threat feature set made the model slightly more conservative and recovered no validation false negatives.
 - National context features should not be kept in the current model.
-- Validation-only threshold tuning for the original logistic regression found the best balanced accuracy at threshold 0.40.
-- Threshold 0.40 vs default 0.50 on validation: balanced accuracy 0.900 vs 0.898, false positives 21 vs 18, false negatives 51 vs 62.
+- After fixing split-boundary leakage, validation-only threshold tuning for the original logistic regression found the best balanced accuracy at the default threshold 0.50.
+- Corrected validation result for logistic regression at threshold 0.50: balanced accuracy 0.905, false positives 16, false negatives 60.
+- Final constrained nonlinear validation experiment did not beat logistic regression.
+- Constrained random forest validation result: balanced accuracy 0.901, false positives 16, false negatives 64.
+- Current modeling conclusion: keep the local-feature logistic regression at threshold 0.50 and stop model experimentation for now.
 
 ## Metric Selection Notes
 

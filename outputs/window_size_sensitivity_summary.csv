@@ -1,0 +1,3 @@
+window,folds,mean_logistic_balanced_accuracy,mean_logistic_alert_recall,total_logistic_false_positives,total_logistic_false_negatives,mean_persistence_balanced_accuracy,mean_persistence_alert_recall,total_persistence_false_positives,total_persistence_false_negatives
+14-day validation / 14-day evaluation,6,0.8829778145257516,0.8935948429041675,73,164,0.8191067166594083,0.8993678590857016,147,153
+60-day validation / 60-day evaluation,4,0.8603977794131104,0.8356263113617387,184,719,0.7917360400963234,0.8841234242635738,485,506

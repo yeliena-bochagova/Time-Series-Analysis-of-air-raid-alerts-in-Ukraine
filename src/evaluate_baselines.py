@@ -1,5 +1,6 @@
 import pandas as pd
 from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
@@ -17,6 +18,7 @@ from src.paths import VOLUNTEER_PANEL_PATH
 
 VALIDATION_DAYS = 30
 TEST_DAYS = 30
+VALIDATION_SUPPORTED_LOGISTIC_THRESHOLD = 0.40
 
 NUMERIC_FEATURES = [
     "alert_starts_today",
@@ -34,15 +36,8 @@ NUMERIC_FEATURES = [
     "is_weekend",
     "month",
 ]
-NATIONAL_CONTEXT_FEATURES = [
-    "national_regions_with_alert_today",
-    "national_alert_starts_today",
-    "national_regions_with_alert_last_3d",
-    "national_alert_starts_last_3d",
-]
 CATEGORICAL_FEATURES = ["region"]
 FEATURE_COLUMNS = NUMERIC_FEATURES + CATEGORICAL_FEATURES
-FEATURE_COLUMNS_WITH_NATIONAL_CONTEXT = NUMERIC_FEATURES + NATIONAL_CONTEXT_FEATURES + CATEGORICAL_FEATURES
 
 
 def load_panel(path) -> pd.DataFrame:
@@ -105,43 +100,8 @@ def add_leakage_safe_features(panel: pd.DataFrame) -> pd.DataFrame:
     panel["day_of_week"] = panel["date"].dt.dayofweek
     panel["is_weekend"] = panel["day_of_week"].isin([5, 6]).astype(int)
     panel["month"] = panel["date"].dt.month
-    panel = add_national_context_features(panel)
 
     return panel
-
-
-def add_national_context_features(panel: pd.DataFrame) -> pd.DataFrame:
-    daily_national = (
-        panel.groupby("date", as_index=False)
-        .agg(
-            national_regions_with_alert_today=("has_alert_today", "sum"),
-            national_alert_starts_today=("alert_starts_today", "sum"),
-        )
-        .sort_values("date")
-    )
-
-    regional_recent_alert = panel[["region", "date", "has_alert_today"]].copy()
-    regional_recent_alert["has_alert_in_last_3d"] = (
-        regional_recent_alert.sort_values(["region", "date"])
-        .groupby("region")["has_alert_today"]
-        .rolling(window=3, min_periods=1)
-        .sum()
-        .reset_index(level=0, drop=True)
-        .gt(0)
-        .astype(int)
-    )
-    regions_with_alert_last_3d = (
-        regional_recent_alert.groupby("date", as_index=False)["has_alert_in_last_3d"]
-        .sum()
-        .rename(columns={"has_alert_in_last_3d": "national_regions_with_alert_last_3d"})
-    )
-
-    daily_national["national_alert_starts_last_3d"] = (
-        daily_national["national_alert_starts_today"].rolling(window=3, min_periods=1).sum()
-    )
-    daily_national = daily_national.merge(regions_with_alert_last_3d, on="date", how="left")
-
-    return panel.merge(daily_national, on="date", how="left")
 
 
 def print_split_ranges(splits: dict[str, pd.DataFrame]) -> None:
@@ -164,13 +124,10 @@ def baseline_predictions(split: pd.DataFrame) -> dict[str, pd.Series]:
     }
 
 
-def make_logistic_regression(numeric_features: list[str] | None = None) -> Pipeline:
-    if numeric_features is None:
-        numeric_features = NUMERIC_FEATURES
-
+def make_logistic_regression() -> Pipeline:
     preprocessor = ColumnTransformer(
         transformers=[
-            ("numeric", StandardScaler(), numeric_features),
+            ("numeric", StandardScaler(), NUMERIC_FEATURES),
             ("region", OneHotEncoder(handle_unknown="ignore"), CATEGORICAL_FEATURES),
         ]
     )
@@ -179,6 +136,32 @@ def make_logistic_regression(numeric_features: list[str] | None = None) -> Pipel
         steps=[
             ("preprocessor", preprocessor),
             ("model", LogisticRegression(max_iter=1000, class_weight="balanced")),
+        ]
+    )
+
+
+def make_constrained_random_forest() -> Pipeline:
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("numeric", "passthrough", NUMERIC_FEATURES),
+            ("region", OneHotEncoder(handle_unknown="ignore"), CATEGORICAL_FEATURES),
+        ]
+    )
+
+    return Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            (
+                "model",
+                RandomForestClassifier(
+                    n_estimators=200,
+                    max_depth=4,
+                    min_samples_leaf=50,
+                    class_weight="balanced_subsample",
+                    random_state=42,
+                    n_jobs=-1,
+                ),
+            ),
         ]
     )
 
@@ -233,12 +216,6 @@ def print_feature_list() -> None:
         print(f"- {feature} one-hot encoded")
 
 
-def print_national_context_feature_list() -> None:
-    print("\nNational context features tested:")
-    for feature in NATIONAL_CONTEXT_FEATURES:
-        print(f"- {feature}")
-
-
 def evaluate_model_split(name: str, split: pd.DataFrame, model: Pipeline) -> None:
     print("\n" + "=" * 90)
     print(f"{name.upper()} PERSISTENCE VS LOGISTIC REGRESSION")
@@ -266,38 +243,28 @@ def confusion_counts(y_true: pd.Series, y_pred: pd.Series) -> dict[str, int]:
     return {"tn": int(tn), "fp": int(fp), "fn": int(fn), "tp": int(tp)}
 
 
-def print_validation_shared_threat_experiment(splits: dict[str, pd.DataFrame]) -> None:
+def print_validation_threshold_tuning(splits: dict[str, pd.DataFrame], model: Pipeline) -> None:
     print("\n" + "=" * 90)
-    print("VALIDATION SHARED-THREAT FEATURE EXPERIMENT")
+    print("VALIDATION LOGISTIC REGRESSION THRESHOLD TUNING")
     print("=" * 90)
-    print("Same logistic regression, same train/validation split, same 0.5 threshold.")
-    print_national_context_feature_list()
+    print("Original logistic regression features and model; validation only.")
 
-    y_train = splits["train"]["has_alert_next_day"].astype(int)
     validation = splits["validation"]
     y_validation = validation["has_alert_next_day"].astype(int)
-
-    current_model = make_logistic_regression(NUMERIC_FEATURES)
-    current_model.fit(splits["train"][FEATURE_COLUMNS], y_train)
-    current_pred = pd.Series(current_model.predict(validation[FEATURE_COLUMNS]), index=validation.index)
-
-    national_model = make_logistic_regression(NUMERIC_FEATURES + NATIONAL_CONTEXT_FEATURES)
-    national_model.fit(splits["train"][FEATURE_COLUMNS_WITH_NATIONAL_CONTEXT], y_train)
-    national_pred = pd.Series(
-        national_model.predict(validation[FEATURE_COLUMNS_WITH_NATIONAL_CONTEXT]),
+    probabilities = pd.Series(
+        model.predict_proba(validation[FEATURE_COLUMNS])[:, 1],
         index=validation.index,
     )
 
+    thresholds = [round(threshold, 2) for threshold in [0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60]]
     rows = []
-    for name, prediction in (
-        ("current_logistic_regression", current_pred),
-        ("with_national_context", national_pred),
-    ):
+    for threshold in thresholds:
+        prediction = probabilities.ge(threshold).astype(int)
         metrics = metric_row(y_validation, prediction)
         counts = confusion_counts(y_validation, prediction)
         rows.append(
             {
-                "model": name,
+                "threshold": threshold,
                 "balanced_accuracy": metrics["balanced_accuracy"],
                 "accuracy": metrics["accuracy"],
                 "precision": metrics["precision"],
@@ -311,11 +278,12 @@ def print_validation_shared_threat_experiment(splits: dict[str, pd.DataFrame]) -
         )
 
     summary = pd.DataFrame(rows)
-    print("\nValidation comparison:")
+    print("\nValidation threshold sweep:")
     print(
         summary.to_string(
             index=False,
             formatters={
+                "threshold": "{:.2f}".format,
                 "balanced_accuracy": "{:.3f}".format,
                 "accuracy": "{:.3f}".format,
                 "precision": "{:.3f}".format,
@@ -325,41 +293,93 @@ def print_validation_shared_threat_experiment(splits: dict[str, pd.DataFrame]) -
         )
     )
 
-    changed = validation.copy()
-    changed["current_pred"] = current_pred
-    changed["national_pred"] = national_pred
-    changed["y"] = y_validation
-    recovered_fn = changed[
-        changed["current_pred"].eq(0) & changed["national_pred"].eq(1) & changed["y"].eq(1)
-    ]
-    new_fp = changed[
-        changed["current_pred"].eq(0) & changed["national_pred"].eq(1) & changed["y"].eq(0)
-    ]
-    lost_tp = changed[
-        changed["current_pred"].eq(1) & changed["national_pred"].eq(0) & changed["y"].eq(1)
-    ]
-    corrected_fp = changed[
-        changed["current_pred"].eq(1) & changed["national_pred"].eq(0) & changed["y"].eq(0)
-    ]
+    best = summary.sort_values(
+        ["balanced_accuracy", "f1", "threshold"],
+        ascending=[False, False, True],
+    ).iloc[0]
+    default = summary[summary["threshold"].eq(0.50)].iloc[0]
 
-    print("\nPrediction changes from adding national context:")
-    print(f"- recovered false negatives: {len(recovered_fn):,}")
-    print(f"- new false positives: {len(new_fp):,}")
-    print(f"- lost true positives: {len(lost_tp):,}")
-    print(f"- corrected false positives: {len(corrected_fp):,}")
+    print("\nBest validation threshold by balanced accuracy:")
+    print(
+        f"threshold={best['threshold']:.2f}, balanced_accuracy={best['balanced_accuracy']:.3f}, "
+        f"false_positives={int(best['false_positives'])}, false_negatives={int(best['false_negatives'])}"
+    )
+    print(
+        "Default 0.50 threshold for comparison: "
+        f"balanced_accuracy={default['balanced_accuracy']:.3f}, "
+        f"false_positives={int(default['false_positives'])}, "
+        f"false_negatives={int(default['false_negatives'])}"
+    )
 
-    if not recovered_fn.empty:
-        print("\nRecovered false negatives by region:")
-        print(recovered_fn["region"].value_counts().head(10).to_string())
-    if not new_fp.empty:
-        print("\nNew false positives by region:")
-        print(new_fp["region"].value_counts().head(10).to_string())
-    if not lost_tp.empty:
-        print("\nLost true positives by region:")
-        print(lost_tp["region"].value_counts().head(10).to_string())
-    if not corrected_fp.empty:
-        print("\nCorrected false positives by region:")
-        print(corrected_fp["region"].value_counts().head(10).to_string())
+
+def validation_result_row(name: str, y_true: pd.Series, y_pred: pd.Series) -> dict:
+    metrics = metric_row(y_true, y_pred)
+    counts = confusion_counts(y_true, y_pred)
+    return {
+        "model": name,
+        "balanced_accuracy": metrics["balanced_accuracy"],
+        "alert_recall": metrics["recall"],
+        "precision": metrics["precision"],
+        "f1": metrics["f1"],
+        "false_positives": counts["fp"],
+        "false_negatives": counts["fn"],
+        "true_negatives": counts["tn"],
+        "true_positives": counts["tp"],
+    }
+
+
+def print_validation_final_model_experiment(splits: dict[str, pd.DataFrame], logistic_model: Pipeline) -> None:
+    print("\n" + "=" * 90)
+    print("VALIDATION FINAL MODEL EXPERIMENT")
+    print("=" * 90)
+    print("Validation only. Same local features and chronological split.")
+    print(
+        "Nonlinear model: RandomForestClassifier("
+        "n_estimators=200, max_depth=4, min_samples_leaf=50, class_weight='balanced_subsample')."
+    )
+
+    train = splits["train"]
+    validation = splits["validation"]
+    y_train = train["has_alert_next_day"].astype(int)
+    y_validation = validation["has_alert_next_day"].astype(int)
+
+    logistic_probabilities = logistic_model.predict_proba(validation[FEATURE_COLUMNS])[:, 1]
+    logistic_prediction = pd.Series(
+        logistic_probabilities,
+        index=validation.index,
+    ).ge(VALIDATION_SUPPORTED_LOGISTIC_THRESHOLD).astype(int)
+
+    random_forest = make_constrained_random_forest()
+    random_forest.fit(train[FEATURE_COLUMNS], y_train)
+    random_forest_prediction = pd.Series(
+        random_forest.predict(validation[FEATURE_COLUMNS]),
+        index=validation.index,
+    )
+
+    persistence_prediction = validation["alert_starts"].gt(0).astype(int)
+    rows = [
+        validation_result_row("persistence", y_validation, persistence_prediction),
+        validation_result_row(
+            f"logistic_regression_threshold_{VALIDATION_SUPPORTED_LOGISTIC_THRESHOLD:.2f}",
+            y_validation,
+            logistic_prediction,
+        ),
+        validation_result_row("constrained_random_forest", y_validation, random_forest_prediction),
+    ]
+    summary = pd.DataFrame(rows)
+
+    print("\nValidation comparison:")
+    print(
+        summary.to_string(
+            index=False,
+            formatters={
+                "balanced_accuracy": "{:.3f}".format,
+                "alert_recall": "{:.3f}".format,
+                "precision": "{:.3f}".format,
+                "f1": "{:.3f}".format,
+            },
+        )
+    )
 
 
 def run_baseline_evaluation() -> dict[str, pd.DataFrame]:
@@ -375,7 +395,8 @@ def run_baseline_evaluation() -> dict[str, pd.DataFrame]:
     model.fit(splits["train"][FEATURE_COLUMNS], splits["train"]["has_alert_next_day"].astype(int))
     evaluate_model_split("validation", splits["validation"], model)
     evaluate_model_split("test", splits["test"], model)
-    print_validation_shared_threat_experiment(splits)
+    print_validation_threshold_tuning(splits, model)
+    print_validation_final_model_experiment(splits, model)
 
     return splits
 

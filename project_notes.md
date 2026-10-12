@@ -69,9 +69,21 @@ C:\ProgramData\anaconda3\envs\kse_agentic\python.exe
 - A simple national-context feature experiment on validation did not help this failure mode.
 - National context features tested: regions with alerts on day `D`, total national alert starts on day `D`, regions with alerts in the last 3 days, and national alert starts in the last 3 days.
 - Validation comparison:
-  - Current logistic regression: balanced accuracy 0.898, false positives 18, false negatives 62.
-  - With national context: balanced accuracy 0.896, false positives 16, false negatives 70.
+- Current logistic regression: balanced accuracy 0.898, false positives 18, false negatives 62.
+- With national context: balanced accuracy 0.896, false positives 16, false negatives 70.
 - The simple shared-threat feature set made the model slightly more conservative and recovered no validation false negatives.
+- National context features should not be kept in the current model.
+- Validation-only threshold tuning for the original logistic regression found the best balanced accuracy at threshold 0.40.
+- Threshold 0.40 vs default 0.50 on validation: balanced accuracy 0.900 vs 0.898, false positives 21 vs 18, false negatives 51 vs 62.
+
+## Metric Selection Notes
+
+- F1 and balanced accuracy disagree because alert days are common.
+- F1 focuses on the positive class and ignores true negatives, so it can favor alert-heavy predictions that do not identify quiet days well.
+- Balanced accuracy averages alert recall and no-alert recall, so it better reflects whether the model distinguishes both classes under class imbalance.
+- Balanced accuracy is a reasonable primary model-selection metric for this project, but it should not be used alone.
+- Use alert-day recall / false negatives as a guardrail, because missing alerts may be more costly than false alarms.
+- Current practical stance: prefer balanced accuracy as the main comparison metric, while inspecting confusion matrices and avoiding threshold choices that reduce false negatives only by creating too many false positives.
 
 ## Parked Ideas
 

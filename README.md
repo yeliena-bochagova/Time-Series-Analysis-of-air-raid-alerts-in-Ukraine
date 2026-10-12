@@ -10,6 +10,8 @@ The user-facing date is the target day being predicted. The information cutoff i
 
 ## Data
 
+This project uses data from the public Ukrainian air-raid sirens dataset maintained at [`Vadimkin/ukrainian-air-raid-sirens-dataset`](https://github.com/Vadimkin/ukrainian-air-raid-sirens-dataset). The analysis/modeling code in this repository is separate work built on top of those source CSVs.
+
 The raw-data stage downloads both source CSVs:
 
 - Volunteer dataset: `data/raw/volunteer_data_en.csv`

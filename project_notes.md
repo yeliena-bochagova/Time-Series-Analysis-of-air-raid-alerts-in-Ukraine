@@ -33,10 +33,47 @@
 
 ## Current Implementation State
 
-- `start.py` downloads both CSVs into `data/raw/` and prints inspection summaries.
-- No aggregation, feature engineering, model training, validation/test splitting, plotting, or tests have been implemented yet.
+- Raw download/audit is implemented in `src/raw_data_audit.py`.
+- Daily volunteer region-date panel preparation is implemented in `src/prepare_daily_panel.py`.
+- Baseline and logistic-regression evaluation is implemented in `src/evaluate_baselines.py`.
+- `start.py` currently runs the evaluation stage.
+- Processed volunteer panel path: `data/processed/volunteer_daily_region_panel.csv`.
+- The processed panel has one row per region per complete `Europe/Kyiv` forecast day, with `alert_starts` and `has_alert_next_day`.
+- Current processed panel summary: `2022-02-25` to `2026-10-10`, 25 regions, 42,225 rows, positive target rate 70.46%.
+- No UI, plots, complex models, or tests have been implemented yet.
 - Python execution for this project should use:
 
 ```text
 C:\ProgramData\anaconda3\envs\kse_agentic\python.exe
 ```
+
+## Evaluation Setup
+
+- Chronological split uses the latest 30 complete forecast days as test, the preceding 30 days as validation, and everything earlier as training/history.
+- Current split:
+  - Train: `2022-02-25` to `2026-08-11`.
+  - Validation: `2026-08-12` to `2026-09-10`.
+  - Test: `2026-09-11` to `2026-10-10`.
+- Baselines implemented:
+  - Always predict alert tomorrow.
+  - Persistence: predict alert tomorrow if the current day has at least one alert.
+
+## Model Findings So Far
+
+- Persistence is a strong baseline.
+- Test persistence result: balanced accuracy 0.893, false positives 21, false negatives 26.
+- Logistic regression with local history, calendar features, and region identity improves test balanced accuracy to 0.940 and reduces false positives to 5, but increases false negatives to 50.
+- Logistic regression is therefore more conservative: it distinguishes quiet days better, but misses more alert days.
+- Validation error analysis showed the main failure mode: logistic regression misses sudden alert returns in quieter/intermittent regions, especially after sparse recent alert history.
+- Validation false negatives were concentrated in regions including Rivnenska, Khmelnytska, Chernivetska, Zhytomyrska, Ternopilska, and Vinnytska oblasts.
+- A simple national-context feature experiment on validation did not help this failure mode.
+- National context features tested: regions with alerts on day `D`, total national alert starts on day `D`, regions with alerts in the last 3 days, and national alert starts in the last 3 days.
+- Validation comparison:
+  - Current logistic regression: balanced accuracy 0.898, false positives 18, false negatives 62.
+  - With national context: balanced accuracy 0.896, false positives 16, false negatives 70.
+- The simple shared-threat feature set made the model slightly more conservative and recovered no validation false negatives.
+
+## Parked Ideas
+
+- Combining official and volunteer datasets is low priority for now.
+- If revisited, first compare overlap-date agreement between volunteer region/day labels and official oblast/day labels before merging.

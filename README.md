@@ -109,50 +109,55 @@ In the latest-period evaluation, the most visible logistic-regression misses are
 
 ## Reproduce
 
-Commands below use the project interpreter used during development. If your environment lives elsewhere, replace the interpreter path consistently.
+Create and activate a Conda environment, then install the project dependencies. These commands work in Anaconda Prompt or a terminal where Conda is available:
+
+```powershell
+conda create --name kse_agentic python=3.11
+conda activate kse_agentic
+```
 
 Install dependencies:
 
 ```powershell
-& "C:\ProgramData\anaconda3\envs\kse_agentic\python.exe" -m pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
 Download and audit raw data:
 
 ```powershell
-& "C:\ProgramData\anaconda3\envs\kse_agentic\python.exe" -m src.raw_data_audit
+python -m src.raw_data_audit
 ```
 
 Prepare the daily region-date panel:
 
 ```powershell
-& "C:\ProgramData\anaconda3\envs\kse_agentic\python.exe" -m src.prepare_daily_panel
+python -m src.prepare_daily_panel
 ```
 
 Run latest-period evaluation and historical backtests:
 
 ```powershell
-& "C:\ProgramData\anaconda3\envs\kse_agentic\python.exe" start.py --mode all
+python start.py --mode all
 ```
 
 Useful CLI options:
 
 ```powershell
-& "C:\ProgramData\anaconda3\envs\kse_agentic\python.exe" start.py --mode latest
-& "C:\ProgramData\anaconda3\envs\kse_agentic\python.exe" start.py --mode backtest --folds 6 --step-days 90
-& "C:\ProgramData\anaconda3\envs\kse_agentic\python.exe" start.py --mode all --validation-days 30 --evaluation-days 30
+python start.py --mode latest
+python start.py --mode backtest --folds 6 --step-days 90
+python start.py --mode all --validation-days 30 --evaluation-days 30
 ```
 
 Run tests:
 
 ```powershell
-& "C:\ProgramData\anaconda3\envs\kse_agentic\python.exe" -m unittest discover -v
+python -m unittest discover -v
 ```
 
 Run the optional inspection UI:
 
 ```powershell
-& "C:\ProgramData\anaconda3\envs\kse_agentic\python.exe" -m streamlit run src/streamlit_app.py
+python -m streamlit run src/streamlit_app.py
 ```
 
 Generated raw/processed data and evaluation artifacts are written under `data/` and `outputs/`. These are ignored by Git.
